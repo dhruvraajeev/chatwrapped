@@ -1,0 +1,9 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+# generated dashboards contain your messages; never commit them
+*.html
+!src/chatwrapped/dashboard.html
+aliases.json

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatwrapped"
+version = "0.1.0"
+description = "Wrapped, but for your iMessage group chat: a private, local reactions dashboard."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Dhruv Raajeev"}]
+requires-python = ">=3.9"
