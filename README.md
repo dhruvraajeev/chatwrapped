@@ -19,4 +19,11 @@ Pick a chat and your dashboard opens in the browser. On first run, give your ter
 
 Sharing it with the group? `chatwrapped --hide-text` leaves message text out.
 
+## Run from source
+
+- Clone it: `git clone https://github.com/dhruvraajeev/chatwrapped && cd chatwrapped` (needs only the Python 3 that comes with macOS)
+- Give your terminal app Full Disk Access in System Settings → Privacy & Security, then restart it
+- Run `PYTHONPATH=src python3 -m chatwrapped` and pick a chat by number (or pass a chat name, or `--list` to see them all)
+- The dashboard is saved to `~/ChatWrapped/<chat>.html` and opens in your browser; rerun to refresh it, and run the tests with `PYTHONPATH=src python3 -m unittest discover tests`
+
 MIT licensed.
