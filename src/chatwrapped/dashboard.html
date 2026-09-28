@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatWrapped</title>
+<style>
+  :root {
+    --bg: #fafaf9; --panel: #fff; --ink: #1c1917; --muted: #78716c; --line: #e7e5e4;
+    --accent: #ea580c; --c0: #f59e0b; --c1: #8b5cf6; --c2: #3b82f6; --c3: #e11d48;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0c0a09; --panel: #1c1917; --ink: #f5f5f4; --muted: #a8a29e; --line: #292524; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .subtitle { color: var(--muted); margin-bottom: 16px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+  .bar label { color: var(--muted); margin-right: 4px; }
+  button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  input[type=number] { width: 64px; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  nav { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); margin: 14px 0 16px; }
+  nav button { border: 0; border-radius: 0; background: none; padding: 8px 12px; color: var(--muted); border-bottom: 2px solid transparent; }
+  nav button.on { color: var(--ink); background: none; border-bottom-color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child, #view table:not(.grid) tr > :nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; cursor: pointer; user-select: none; }
+  th.on { color: var(--ink); }
+  td.cellbar { position: relative; }
+  td.cellbar i { position: absolute; right: 0; top: 20%; bottom: 20%; background: var(--accent); opacity: .18; border-radius: 3px; }
+  .dim { color: var(--muted); opacity: .6; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title"></h1>
+  <div class="subtitle" id="subtitle"></div>
+  <div class="bar" id="reaction"></div>
+  <div class="bar" id="time-window"></div>
+  <div class="bar"><label>Min msgs for rates</label><input type="number" id="min-msgs" value="50" min="0" step="10"></div>
+  <nav id="tabs"></nav>
+  <section id="view"></section>
+</main>
+<script>window.DATA = /*DATA*/null;</script>
+<script>
+// The CLI fills in DATA (see build_data in cli.py). People and messages are referred to by index.
+const data = window.DATA;
+const people = data.people;
+const EMOJI = ['😂', '💀', '😭', '❤️'];
+const DAY = 86400;
+
+const REACTION_FILTERS = {
+  funny: { label: '😂💀😭 Funny', categories: [0, 1, 2] },
+  laugh: { label: '😂 Laughs', categories: [0] },
+  skull: { label: '💀 Skulls', categories: [1] },
+  sob: { label: '😭 Sobs', categories: [2] },
+  heart: { label: '❤️ Hearts', categories: [3] },
+};
+const TIME_WINDOWS = { all: 'All time', 365: 'Last 365 days', 30: 'Last 30 days' };
+
+// Everything the viewer can change. Buttons update it and the page re-renders.
+const state = {
+  reaction: 'funny',
+  timeWindow: 'all',
+  minMsgs: 50,
+  tab: 'rankings',
+  sortBy: 'receivedPer100',
+};
+
+// Each page adds itself here as { title, render }.
+const PAGES = {};
+
+// ---------- helpers ----------
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function escapeHtml(text) {
+  const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+  return String(text).replace(/[&<>"]/g, char => entities[char]);
+}
+
+function formatNumber(value, decimals = 0) {
+  if (value == null) return '<span class="dim">—</span>';
+  return value.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+function formatDate(unixTime) {
+  return new Date(unixTime * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function zeros(length = people.length) {
+  return new Array(length).fill(0);
+}
+
+function sum(numbers) {
+  return numbers.reduce((total, n) => total + n, 0);
+}
+
+function sender(msg) {
+  return data.msgs[msg][0];
+}
+
+function sentAt(msg) {
+  return data.msgs[msg][1];
+}
+
+function card(html) {
+  return `<div class="card">${html}</div>`;
+}
+
+function note(html) {
+  return `<p class="note">${html}</p>`;
+}
+
+function windowStart() {
+  if (state.timeWindow === 'all') return 0;
+  return Date.now() / 1000 - Number(state.timeWindow) * DAY;
+}
+
+// Reactions to messages sent inside the chosen time window.
+function filteredReacts(categories = REACTION_FILTERS[state.reaction].categories) {
+  const start = windowStart();
+  return data.reacts.filter(([, msg, category]) => categories.includes(category) && sentAt(msg) >= start);
+}
+
+function countStats() {
+  const start = windowStart();
+  const msgCount = zeros();
+  const charCount = zeros();
+  const received = zeros();
+  const given = zeros();
+
+  for (const [person, time, length] of data.msgs) {
+    if (time >= start) {
+      msgCount[person]++;
+      charCount[person] += length;
+    }
+  }
+
+  const reacts = filteredReacts();
+  for (const [reactor, msg] of reacts) {
+    received[sender(msg)]++;
+    given[reactor]++;
+  }
+
+  return { msgCount, charCount, received, given };
+}
+
+// ---------- rankings ----------
+
+const RANKING_COLUMNS = [
+  { key: 'msgs', label: 'Msgs' },
+  { key: 'received', label: 'Received' },
+  { key: 'receivedPer100', label: 'Recv / 100 msgs', decimals: 2 },
+  { key: 'receivedPer1k', label: 'Recv / 1k chars', decimals: 2 },
+  { key: 'given', label: 'Given' },
+  { key: 'givenPer100', label: 'Given / 100 msgs', decimals: 2 },
+];
+
+function renderRankings() {
+  const stats = countStats();
+  const rows = [];
+
+  people.forEach((name, p) => {
+    const msgs = stats.msgCount[p];
+    if (!msgs && !stats.given[p]) return;  // not around in this time window
+
+    // Rates stay empty for people with too few messages for them to mean anything.
+    const rate = (count, total, per) => (msgs >= state.minMsgs && total ? per * count / total : null);
+
+    rows.push({
+      name,
+      msgs,
+      received: stats.received[p],
+      receivedPer100: rate(stats.received[p], msgs, 100),
+      receivedPer1k: rate(stats.received[p], stats.charCount[p], 1000),
+      given: stats.given[p],
+      givenPer100: rate(stats.given[p], msgs, 100),
+    });
+  });
+
+  const key = state.sortBy;
+  rows.sort((a, b) => (b[key] ?? -1) - (a[key] ?? -1));
+  const best = Math.max(...rows.map(row => row[key] ?? 0)) || 1;
+
+  let html = '<table><tr><th>#</th><th>Person</th>';
+  for (const column of RANKING_COLUMNS) {
+    html += `<th data-sort="${column.key}" class="${column.key === key ? 'on' : ''}">${column.label}</th>`;
+  }
+  html += '</tr>';
+
+  rows.forEach((row, rank) => {
+    html += `<tr><td>${row[key] == null ? '' : rank + 1}</td><td>${escapeHtml(row.name)}</td>`;
+    for (const column of RANKING_COLUMNS) {
+      const value = row[column.key];
+      const bar = column.key === key && value ? `<i style="width: ${100 * value / best}%"></i>` : '';
+      html += `<td class="cellbar">${bar}${formatNumber(value, column.decimals)}</td>`;
+    }
+    html += '</tr>';
+  });
+  html += '</table>';
+
+  let explanation = `Click a column to rank by it. Rates skip anyone with fewer than ${state.minMsgs} messages in this window.
+    Reactions count toward the day the message was sent, and reacting to your own message doesn't count.`;
+  return card(html) + note(explanation);
+}
+
+PAGES.rankings = { title: 'Rankings', render: renderRankings };
+
+// ---------- page shell ----------
+
+function toggle(stateKey, options) {
+  let html = '';
+  for (const [value, label] of Object.entries(options)) {
+    html += `<button data-set="${stateKey}" data-value="${value}" class="${state[stateKey] === value ? 'on' : ''}">${label}</button>`;
+  }
+  return html;
+}
+
+function render() {
+
+  const reactionLabels = {};
+  for (const [key, filter] of Object.entries(REACTION_FILTERS)) reactionLabels[key] = filter.label;
+  const tabTitles = {};
+  for (const [key, page] of Object.entries(PAGES)) tabTitles[key] = page.title;
+
+  $('reaction').innerHTML = '<label>Reaction</label>' + toggle('reaction', reactionLabels);
+  $('time-window').innerHTML = '<label>Window</label>' + toggle('timeWindow', TIME_WINDOWS);
+  $('tabs').innerHTML = toggle('tab', tabTitles);
+  $('view').innerHTML = PAGES[state.tab].render();
+}
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-set]');
+  const header = event.target.closest('th[data-sort]');
+  if (button) {
+    state[button.dataset.set] = button.dataset.value;
+    render();
+  } else if (header) {
+    state.sortBy = header.dataset.sort;
+    render();
+  }
+});
+
+document.addEventListener('input', event => {
+  if (event.target.id === 'min-msgs') {
+    state.minMsgs = Number(event.target.value) || 0;
+    render();
+  }
+});
+
+const firstMsg = data.msgs[0][1];
+const lastMsg = data.msgs[data.msgs.length - 1][1];
+$('title').textContent = data.chat;
+document.title = `${data.chat} · ChatWrapped`;
+$('subtitle').textContent = `${data.msgs.length.toLocaleString()} messages · ${data.reacts.length.toLocaleString()} reactions · ${formatDate(firstMsg)} – ${formatDate(lastMsg)}`;
+render();
+</script>
+</body>
+</html>

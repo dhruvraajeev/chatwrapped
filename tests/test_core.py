@@ -3,6 +3,7 @@ import unittest
 from chatwrapped import messages
 from chatwrapped import contacts
 from chatwrapped import reactions
+from chatwrapped.cli import build_data, find_chat, render_html
 
 
 class MessagesTest(unittest.TestCase):
@@ -46,6 +47,47 @@ class ReactionsTest(unittest.TestCase):
             (5, "b"): reactions.SKULL,
         }
         self.assertEqual(reactions.final_reactions(events), expected)
+
+
+class BuildDataTest(unittest.TestCase):
+    # (guid, sender, time, text, reaction_type, reacted_to, emoji); a sender of None means me
+    ROWS = [
+        ("m1", "+15125550101", 100, "joke", 0, None, None),
+        ("m2", None, 200, "</script><b>hi", 0, None, None),
+        ("r1", None, 300, "", 2006, "p:0/m1", "💀"),              # I skull Sam's joke
+        ("r2", "sam@icloud.com", 400, "", 2003, "p:0/m1", None),  # Sam laughs at his own joke (ignored)
+        ("r3", "+15125550101", 500, "", 2000, "p:0/m2", None),    # Sam hearts my message
+    ]
+    NAMES = {"5125550101": "Sam", "sam@icloud.com": "Sam"}
+
+    def test_build_data(self):
+        data = build_data("chat", self.ROWS, self.NAMES)
+        self.assertEqual(data["people"], ["Sam", "Me"])
+        self.assertEqual(data["msgs"], [[0, 100, 4], [1, 200, 14]])
+        self.assertEqual(sorted(data["reacts"]), [[0, 1, reactions.HEART], [1, 0, reactions.SKULL]])
+        self.assertEqual(data["texts"], {0: "joke", 1: "</script><b>hi"})
+
+    def test_hide_text(self):
+        data = build_data("chat", self.ROWS, self.NAMES, hide_text=True)
+        self.assertEqual(set(data["texts"].values()), {"(text hidden)"})
+
+    def test_message_cannot_break_out_of_the_script_tag(self):
+        html = render_html(build_data("chat", self.ROWS, self.NAMES))
+        self.assertNotIn("/*DATA*/null", html)
+        self.assertNotIn("</script><b>", html)
+
+
+class FindChatTest(unittest.TestCase):
+    CHATS = [(50, "the squad", 9), (7, "+15125550101, Sam", 5), (8, "squad club", 3)]
+
+    def test_exact_name_then_id_then_part_of_name(self):
+        self.assertEqual(find_chat(self.CHATS, "The Squad")[0], 50)
+        self.assertEqual(find_chat(self.CHATS, "50")[0], 50)  # the id wins over the "50" in a phone number
+        self.assertEqual(find_chat(self.CHATS, "club")[0], 8)
+
+    def test_ambiguous_name_exits(self):
+        with self.assertRaises(SystemExit):
+            find_chat(self.CHATS, "squad")
 
 
 if __name__ == "__main__":

@@ -10,3 +10,9 @@ readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Dhruv Raajeev"}]
 requires-python = ">=3.9"
+
+[project.scripts]
+chatwrapped = "chatwrapped.cli:main"
+
+[tool.setuptools.package-data]
+chatwrapped = ["dashboard.html"]
