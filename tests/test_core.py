@@ -2,6 +2,7 @@ import unittest
 
 from chatwrapped import messages
 from chatwrapped import contacts
+from chatwrapped import reactions
 
 
 class MessagesTest(unittest.TestCase):
@@ -26,6 +27,25 @@ class ContactsTest(unittest.TestCase):
 
     def test_missing_aliases_file(self):
         self.assertEqual(contacts.load_aliases("/nonexistent/aliases.json"), {})
+
+
+class ReactionsTest(unittest.TestCase):
+    def test_latest_reaction_wins(self):
+        events = [
+            (1, "a", 2003, None), (1, "a", 3003, None),  # laugh, then taken back
+            (2, "a", 2006, "😂"),                         # emoji laugh
+            (3, "a", 2000, None),                         # heart
+            (4, "b", 2003, None), (4, "b", 2000, None),  # laugh changed to heart
+            (5, "b", 2000, None), (5, "b", 2006, "💀"),  # heart changed to skull
+            (6, "b", 2003, None), (6, "b", 2006, "🔥"),  # laugh changed to an emoji we don't track
+        ]
+        expected = {
+            (2, "a"): reactions.LAUGH,
+            (3, "a"): reactions.HEART,
+            (4, "b"): reactions.HEART,
+            (5, "b"): reactions.SKULL,
+        }
+        self.assertEqual(reactions.final_reactions(events), expected)
 
 
 if __name__ == "__main__":
