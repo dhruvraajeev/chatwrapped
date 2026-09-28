@@ -35,6 +35,7 @@
   td.cellbar i { position: absolute; right: 0; top: 20%; bottom: 20%; background: var(--accent); opacity: .18; border-radius: 3px; }
   .dim { color: var(--muted); opacity: .6; }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .grid td { text-align: center; min-width: 34px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -71,6 +72,7 @@ const state = {
   minMsgs: 50,
   tab: 'rankings',
   sortBy: 'receivedPer100',
+  whomMode: 'count',
 };
 
 // Each page adds itself here as { title, render }.
@@ -120,6 +122,11 @@ function note(html) {
   return `<p class="note">${html}</p>`;
 }
 
+// Background shading for heatmap cells; `fraction` is 0 to 1.
+function heat(fraction, strength) {
+  return `background: color-mix(in srgb, var(--accent) ${Math.round(strength * fraction)}%, transparent)`;
+}
+
 function windowStart() {
   if (state.timeWindow === 'all') return 0;
   return Date.now() / 1000 - Number(state.timeWindow) * DAY;
@@ -137,6 +144,7 @@ function countStats() {
   const charCount = zeros();
   const received = zeros();
   const given = zeros();
+  const matrix = people.map(() => zeros());  // matrix[giver][receiver]
 
   for (const [person, time, length] of data.msgs) {
     if (time >= start) {
@@ -149,9 +157,23 @@ function countStats() {
   for (const [reactor, msg] of reacts) {
     received[sender(msg)]++;
     given[reactor]++;
+    matrix[reactor][sender(msg)]++;
   }
 
-  return { msgCount, charCount, received, given };
+  const toughCrowd = toughCrowdScores(reacts, given);
+  return { msgCount, charCount, received, given, matrix, toughCrowd };
+}
+
+// Tough-crowd score: a react from someone who hardly ever reacts is worth more.
+// Each react counts as (average reacts given per person) / (reacts this person gave).
+function toughCrowdScores(reacts, given) {
+  const reactors = given.filter(count => count > 0);
+  const average = sum(reactors) / (reactors.length || 1);
+  const scores = zeros();
+  for (const [reactor, msg] of reacts) {
+    scores[sender(msg)] += average / given[reactor];
+  }
+  return scores;
 }
 
 // ---------- rankings ----------
@@ -163,6 +185,8 @@ const RANKING_COLUMNS = [
   { key: 'receivedPer1k', label: 'Recv / 1k chars', decimals: 2 },
   { key: 'given', label: 'Given' },
   { key: 'givenPer100', label: 'Given / 100 msgs', decimals: 2 },
+  { key: 'toughCrowd', label: 'Tough-crowd score', decimals: 1 },
+  { key: 'toughCrowdPer100', label: 'Tough-crowd / 100 msgs', decimals: 2 },
 ];
 
 function renderRankings() {
@@ -184,6 +208,8 @@ function renderRankings() {
       receivedPer1k: rate(stats.received[p], stats.charCount[p], 1000),
       given: stats.given[p],
       givenPer100: rate(stats.given[p], msgs, 100),
+      toughCrowd: stats.toughCrowd[p],
+      toughCrowdPer100: rate(stats.toughCrowd[p], msgs, 100),
     });
   });
 
@@ -210,10 +236,59 @@ function renderRankings() {
 
   let explanation = `Click a column to rank by it. Rates skip anyone with fewer than ${state.minMsgs} messages in this window.
     Reactions count toward the day the message was sent, and reacting to your own message doesn't count.`;
+  explanation += ` <b>Tough-crowd score</b> weighs every reaction by how stingy the person giving it is, so a 💀 from
+    the friend who never reacts beats one from the group's reaction machine.`;
   return card(html) + note(explanation);
 }
 
 PAGES.rankings = { title: 'Rankings', render: renderRankings };
+
+// ---------- who -> whom ----------
+
+function renderWhoToWhom() {
+  const { matrix, msgCount, given } = countStats();
+  const active = people.map((_, p) => p).filter(p => msgCount[p] || given[p]);
+  const asPercent = state.whomMode === 'percent';
+
+  const value = (giver, receiver) => {
+    if (!asPercent) return matrix[giver][receiver];
+    return given[giver] ? 100 * matrix[giver][receiver] / given[giver] : 0;
+  };
+  const biggest = Math.max(...active.flatMap(giver => active.map(receiver => value(giver, receiver)))) || 1;
+
+  let html = '<table class="grid"><tr><th>giver ↓ / receiver →</th>';
+  for (const receiver of active) {
+    html += `<th>${escapeHtml(people[receiver])}</th>`;
+  }
+  html += '</tr>';
+
+  for (const giver of active) {
+    html += `<tr><td>${escapeHtml(people[giver])}</td>`;
+    for (const receiver of active) {
+      const v = value(giver, receiver);
+      const label = giver === receiver || !v ? '' : formatNumber(v) + (asPercent ? '%' : '');
+      html += `<td style="${heat(v / biggest, 80)}">${label}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  const fans = [];
+  for (const receiver of active) {
+    let fan = active[0];
+    for (const giver of active) {
+      if (matrix[giver][receiver] > matrix[fan][receiver]) fan = giver;
+    }
+    if (matrix[fan][receiver]) {
+      fans.push(`<b>${escapeHtml(people[receiver])}</b>'s biggest fan: ${escapeHtml(people[fan])} (${matrix[fan][receiver]})`);
+    }
+  }
+
+  const modes = toggle('whomMode', { count: 'Raw count', percent: "% of giver's reacts" });
+  return `<div class="bar">${modes}</div>` + card(html) + note(fans.join(' · '));
+}
+
+PAGES.whom = { title: 'Who → Whom', render: renderWhoToWhom };
 
 // ---------- page shell ----------
 
