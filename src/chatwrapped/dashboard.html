@@ -36,6 +36,13 @@
   .dim { color: var(--muted); opacity: .6; }
   .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .grid td { text-align: center; min-width: 34px; font-size: 12px; }
+  .race { position: relative; }
+  .race .row { position: absolute; left: 0; right: 0; height: 28px; display: flex; align-items: center; gap: 8px; transition: transform .45s ease; }
+  .race .name { width: 120px; flex: none; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .race .fill { height: 22px; background: var(--accent); border-radius: 4px; transition: width .45s ease; min-width: 2px; }
+  .race .val { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .racedate { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  input[type=range] { flex: 1; min-width: 160px; }
 </style>
 </head>
 <body>
@@ -73,6 +80,7 @@ const state = {
   tab: 'rankings',
   sortBy: 'receivedPer100',
   whomMode: 'count',
+  hoursMode: 'rate',
 };
 
 // Each page adds itself here as { title, render }.
@@ -125,6 +133,11 @@ function note(html) {
 // Background shading for heatmap cells; `fraction` is 0 to 1.
 function heat(fraction, strength) {
   return `background: color-mix(in srgb, var(--accent) ${Math.round(strength * fraction)}%, transparent)`;
+}
+
+// Adds up a grid of rows column by column.
+function columnTotals(rows) {
+  return rows[0].map((_, column) => sum(rows.map(row => row[column])));
 }
 
 function windowStart() {
@@ -290,6 +303,134 @@ function renderWhoToWhom() {
 
 PAGES.whom = { title: 'Who → Whom', render: renderWhoToWhom };
 
+// ---------- bar race ----------
+
+const RACE_ROW_HEIGHT = 32;
+const race = { frames: [], frame: 0, timer: null };
+
+function renderBarRace() {
+  const daysPerFrame = { all: 30, 365: 7, 30: 1 }[state.timeWindow];
+
+  // One entry per reaction, pointing at the message it was on, oldest first.
+  const reactedMsgs = filteredReacts().map(([, msg]) => msg).sort((a, b) => sentAt(a) - sentAt(b));
+
+  // Each frame is everyone's running total at the end of that month / week / day.
+  race.frames = [];
+  const totals = zeros();
+  let next = 0;
+  let frameEnd = reactedMsgs.length ? sentAt(reactedMsgs[0]) : 0;
+  while (next < reactedMsgs.length) {
+    frameEnd += daysPerFrame * DAY;
+    while (next < reactedMsgs.length && sentAt(reactedMsgs[next]) < frameEnd) {
+      totals[sender(reactedMsgs[next])]++;
+      next++;
+    }
+    race.frames.push({ time: frameEnd, totals: totals.slice() });
+  }
+  race.frame = race.frames.length - 1;
+  setTimeout(drawRace);  // draw once the rows below are on the page
+
+  let rows = '';
+  people.forEach((name, p) => {
+    rows += `<div class="row" id="race-${p}"><span class="name">${escapeHtml(name)}</span><span class="fill"></span><span class="val"></span></div>`;
+  });
+
+  const controls = `<div class="bar">
+    <button id="play">▶ Play</button>
+    <input type="range" id="scrub" min="0" max="${Math.max(0, race.frames.length - 1)}" value="${race.frame}">
+    <span class="racedate" id="racedate"></span>
+  </div>`;
+  const unit = { 30: 'month', 7: 'week', 1: 'day' }[daysPerFrame];
+  return controls
+    + card(`<div class="race" style="height: ${people.length * RACE_ROW_HEIGHT}px">${rows}</div>`)
+    + note(`Running total of ${REACTION_FILTERS[state.reaction].label} received, one frame per ${unit}.`);
+}
+
+function drawRace() {
+  const frame = race.frames[race.frame];
+  if (!frame || !$('racedate')) return;  // no reactions, or we've already left this tab
+
+  const best = Math.max(...frame.totals) || 1;
+  const order = people.map((_, p) => p).sort((a, b) => frame.totals[b] - frame.totals[a]);
+  order.forEach((p, place) => {
+    const row = $(`race-${p}`);
+    row.style.transform = `translateY(${place * RACE_ROW_HEIGHT}px)`;
+    row.querySelector('.fill').style.width = `calc((100% - 200px) * ${frame.totals[p] / best})`;
+    row.querySelector('.val').textContent = frame.totals[p];
+  });
+  $('racedate').textContent = formatDate(frame.time);
+  $('scrub').value = race.frame;
+}
+
+function stopRace() {
+  clearInterval(race.timer);
+  race.timer = null;
+  if ($('play')) $('play').textContent = '▶ Play';
+}
+
+function playOrPauseRace() {
+  if (race.timer) return stopRace();
+  if (race.frame >= race.frames.length - 1) race.frame = 0;  // start over from the beginning
+  $('play').textContent = '❚❚ Pause';
+  race.timer = setInterval(() => {
+    if (race.frame >= race.frames.length - 1) return stopRace();
+    race.frame++;
+    drawRace();
+  }, 500);
+}
+
+PAGES.race = { title: 'Bar race', render: renderBarRace };
+
+// ---------- hours ----------
+
+function renderHours() {
+  const start = windowStart();
+  const hourOf = time => new Date(time * 1000).getHours();
+  const sent = people.map(() => zeros(24));
+  const got = people.map(() => zeros(24));
+
+  for (const [person, time] of data.msgs) {
+    if (time >= start) sent[person][hourOf(time)]++;
+  }
+  for (const [, msg] of filteredReacts()) {
+    got[sender(msg)][hourOf(sentAt(msg))]++;
+  }
+
+  const rows = [{ name: 'Everyone', sent: columnTotals(sent), got: columnTotals(got) }];
+  people.forEach((name, p) => rows.push({ name, sent: sent[p], got: got[p] }));
+  const shown = rows.filter(row => sum(row.sent) >= state.minMsgs);
+
+  // A rate needs at least 10 messages in that hour, otherwise the cell stays blank.
+  const value = (row, hour) => {
+    if (state.hoursMode === 'count') return row.got[hour];
+    return row.sent[hour] >= 10 ? 100 * row.got[hour] / row.sent[hour] : null;
+  };
+  const biggest = Math.max(...shown.flatMap(row => row.got.map((_, hour) => value(row, hour) ?? 0))) || 1;
+  const hourLabel = hour => (hour % 12 || 12) + (hour < 12 ? 'a' : 'p');
+
+  let html = '<table class="grid"><tr><th></th>';
+  for (let hour = 0; hour < 24; hour++) {
+    html += `<th>${hourLabel(hour)}</th>`;
+  }
+  html += '</tr>';
+
+  for (const row of shown) {
+    html += `<tr><td>${escapeHtml(row.name)}</td>`;
+    for (let hour = 0; hour < 24; hour++) {
+      const v = value(row, hour);
+      html += `<td style="${heat((v ?? 0) / biggest, 85)}">${v == null ? '' : formatNumber(v)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  const modes = toggle('hoursMode', { rate: 'Reacts per 100 msgs', count: 'Raw count' });
+  return `<div class="bar">${modes}</div>` + card(html)
+    + note('By the hour the message was sent, in your local time. Rates need at least 10 messages in that hour.');
+}
+
+PAGES.hours = { title: 'When (hours)', render: renderHours };
+
 // ---------- page shell ----------
 
 function toggle(stateKey, options) {
@@ -301,6 +442,7 @@ function toggle(stateKey, options) {
 }
 
 function render() {
+  stopRace();
 
   const reactionLabels = {};
   for (const [key, filter] of Object.entries(REACTION_FILTERS)) reactionLabels[key] = filter.label;
@@ -322,6 +464,8 @@ document.addEventListener('click', event => {
   } else if (header) {
     state.sortBy = header.dataset.sort;
     render();
+  } else if (event.target.id === 'play') {
+    playOrPauseRace();
   }
 });
 
@@ -329,6 +473,10 @@ document.addEventListener('input', event => {
   if (event.target.id === 'min-msgs') {
     state.minMsgs = Number(event.target.value) || 0;
     render();
+  }
+  if (event.target.id === 'scrub') {
+    race.frame = Number(event.target.value);
+    drawRace();
   }
 });
 
