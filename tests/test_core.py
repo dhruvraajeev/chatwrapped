@@ -66,6 +66,7 @@ class BuildDataTest(unittest.TestCase):
         self.assertEqual(data["msgs"], [[0, 100, 4], [1, 200, 14]])
         self.assertEqual(sorted(data["reacts"]), [[0, 1, reactions.HEART], [1, 0, reactions.SKULL]])
         self.assertEqual(data["texts"], {0: "joke", 1: "</script><b>hi"})
+        self.assertEqual(data["guids"], {0: "m1", 1: "m2"})
 
     def test_hide_text(self):
         data = build_data("chat", self.ROWS, self.NAMES, hide_text=True)

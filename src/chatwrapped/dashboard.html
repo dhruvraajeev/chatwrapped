@@ -50,6 +50,8 @@
   .stack { display: flex; height: 18px; border-radius: 4px; overflow: hidden; min-width: 160px; background: var(--line); }
   .legend span { margin-right: 14px; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .msg a { color: var(--accent); text-decoration: none; font-size: 12px; margin-left: 8px; }
+  .msg a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -456,9 +458,11 @@ function renderTopMessages() {
   let html = '';
   for (const [msg, reacts] of top) {
     const who = reacts.map(r => `${EMOJI[r.category]} ${escapeHtml(people[r.reactor])}`).join(' · ');
+    // Opens the Messages app scrolled to this exact message.
+    const link = `<a href="sms://open?message-guid=${encodeURIComponent(data.guids[msg])}">Open in Messages ↗</a>`;
     html += `<div class="msg">
       <span class="count">${reacts.length}</span>
-      <div class="meta">${escapeHtml(people[sender(msg)])} · ${formatDate(sentAt(msg))}</div>
+      <div class="meta">${escapeHtml(people[sender(msg)])} · ${formatDate(sentAt(msg))} ${link}</div>
       <div class="text">${escapeHtml(data.texts[msg] || '[attachment]')}</div>
       <div class="meta">${who}</div>
     </div>`;

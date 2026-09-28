@@ -25,6 +25,7 @@ def build_data(chat_name, rows, names, hide_text=False):
 
     msgs = []       # [sender, unix_time, length]
     texts = []
+    guids = []
     msg_index = {}  # message guid -> position in msgs
     events = []     # every reaction, in order
 
@@ -34,6 +35,7 @@ def build_data(chat_name, rows, names, hide_text=False):
             msg_index[guid] = len(msgs)
             msgs.append([who, when, len(text)])
             texts.append(text)
+            guids.append(guid)
         elif target:
             # target looks like "p:0/<guid>" or "bp:<guid>"
             target_guid = target.split("/")[-1].removeprefix("bp:")
@@ -54,6 +56,7 @@ def build_data(chat_name, rows, names, hide_text=False):
         "msgs": msgs,
         "reacts": reacts,
         "texts": {i: "(text hidden)" if hide_text else texts[i] for i in reacted},
+        "guids": {i: guids[i] for i in reacted},
     }
 
 
