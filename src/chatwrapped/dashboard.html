@@ -43,6 +43,13 @@
   .race .val { font-variant-numeric: tabular-nums; color: var(--muted); }
   .racedate { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
   input[type=range] { flex: 1; min-width: 160px; }
+  .msg { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .msg .meta { color: var(--muted); font-size: 12px; }
+  .msg .text { font-size: 15px; margin: 2px 0 4px; white-space: pre-wrap; word-break: break-word; }
+  .msg .count { float: right; font-size: 18px; font-weight: 700; margin-left: 12px; }
+  .stack { display: flex; height: 18px; border-radius: 4px; overflow: hidden; min-width: 160px; background: var(--line); }
+  .legend span { margin-right: 14px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 </style>
 </head>
 <body>
@@ -431,6 +438,107 @@ function renderHours() {
 
 PAGES.hours = { title: 'When (hours)', render: renderHours };
 
+// ---------- top messages ----------
+
+function renderTopMessages() {
+  const reactsByMsg = new Map();
+  for (const [reactor, msg, category] of filteredReacts()) {
+    if (!reactsByMsg.has(msg)) reactsByMsg.set(msg, []);
+    reactsByMsg.get(msg).push({ reactor, category });
+  }
+
+  // Most reactions first; ties go to the newer message.
+  const top = [...reactsByMsg.entries()]
+    .sort(([msgA, a], [msgB, b]) => b.length - a.length || sentAt(msgB) - sentAt(msgA))
+    .slice(0, 50);
+  if (!top.length) return card(note('Nothing in this window.'));
+
+  let html = '';
+  for (const [msg, reacts] of top) {
+    const who = reacts.map(r => `${EMOJI[r.category]} ${escapeHtml(people[r.reactor])}`).join(' · ');
+    html += `<div class="msg">
+      <span class="count">${reacts.length}</span>
+      <div class="meta">${escapeHtml(people[sender(msg)])} · ${formatDate(sentAt(msg))}</div>
+      <div class="text">${escapeHtml(data.texts[msg] || '[attachment]')}</div>
+      <div class="meta">${who}</div>
+    </div>`;
+  }
+  return card(html);
+}
+
+PAGES.top = { title: 'Top messages', render: renderTopMessages };
+
+// ---------- reaction mix ----------
+
+function shares(counts) {
+  const total = sum(counts);
+  return counts.map(count => (total ? count / total : 0));
+}
+
+// Someone's signature reaction is the one that makes up more of theirs than of the group's.
+// It needs at least 5 of that reaction to count.
+function signature(counts, groupShares) {
+  const mine = shares(counts);
+  let best = null;
+  let bestLift = 0;
+  counts.forEach((count, category) => {
+    const lift = groupShares[category] ? mine[category] / groupShares[category] : 0;
+    if (count >= 5 && lift > bestLift) {
+      best = category;
+      bestLift = lift;
+    }
+  });
+  return best == null ? '' : `${EMOJI[best]} <span class="dim">${bestLift.toFixed(1)}×</span>`;
+}
+
+function mixBar(counts) {
+  const total = sum(counts);
+  const tooltip = counts.map((count, category) => `${EMOJI[category]} ${count}`).join('  ');
+  let segments = '';
+  counts.forEach((count, category) => {
+    if (total) segments += `<span style="width: ${100 * count / total}%; background: var(--c${category})"></span>`;
+  });
+  return `<div class="stack" title="${tooltip}">${segments}</div>`;
+}
+
+// Ignores the reaction filter on purpose: it compares all four side by side.
+function renderReactionMix() {
+  const received = people.map(() => zeros(4));
+  const given = people.map(() => zeros(4));
+  for (const [reactor, msg, category] of filteredReacts([0, 1, 2, 3])) {
+    received[sender(msg)][category]++;
+    given[reactor][category]++;
+  }
+  const groupReceived = shares(columnTotals(received));
+  const groupGiven = shares(columnTotals(given));
+
+  const active = people.map((_, p) => p)
+    .filter(p => sum(received[p]) || sum(given[p]))
+    .sort((a, b) => sum(received[b]) - sum(received[a]));
+
+  const emojis = EMOJI.join(' ');
+  let html = `<table><tr><th>Person</th><th>Received ${emojis}</th><th>Received mix</th><th>Signature (recv)</th>
+    <th>Given ${emojis}</th><th>Given mix</th><th>Signature (given)</th></tr>`;
+  for (const p of active) {
+    html += `<tr>
+      <td>${escapeHtml(people[p])}</td>
+      <td>${received[p].join(' · ')}</td><td>${mixBar(received[p])}</td><td>${signature(received[p], groupReceived)}</td>
+      <td>${given[p].join(' · ')}</td><td>${mixBar(given[p])}</td><td>${signature(given[p], groupGiven)}</td>
+    </tr>`;
+  }
+  html += '</table>';
+
+  let legend = '';
+  EMOJI.forEach((emoji, category) => {
+    legend += `<span><i class="swatch" style="background: var(--c${category})"></i>${emoji} ${data.categories[category]}</span>`;
+  });
+  return `<div class="bar legend">${legend}</div>` + card(html)
+    + note(`<b>Signature</b> is the reaction someone gets (or gives) most compared with everyone else.
+      💀 2.1× means skulls make up 2.1× more of their reactions than of the group's.`);
+}
+
+PAGES.mix = { title: 'Reaction mix', render: renderReactionMix };
+
 // ---------- page shell ----------
 
 function toggle(stateKey, options) {
@@ -452,6 +560,7 @@ function render() {
   $('reaction').innerHTML = '<label>Reaction</label>' + toggle('reaction', reactionLabels);
   $('time-window').innerHTML = '<label>Window</label>' + toggle('timeWindow', TIME_WINDOWS);
   $('tabs').innerHTML = toggle('tab', tabTitles);
+  $('reaction').style.opacity = state.tab === 'mix' ? 0.4 : 1;  // the mix page ignores this filter
   $('view').innerHTML = PAGES[state.tab].render();
 }
 
